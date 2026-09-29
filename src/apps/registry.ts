@@ -1,7 +1,7 @@
 import { lazy } from "react";
 import type { ComponentType } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Calculator, Pin } from "lucide-react";
+import { Calculator, ListTodo, Pin } from "lucide-react";
 
 export type AppCategory = "Utilities" | "Creativity" | "Play" | "Lifestyle";
 
@@ -41,6 +41,17 @@ export const miniApps: MiniApp[] = [
     tile: "from-aqua-400 to-teal-600",
     glow: "shadow-aqua-500/30",
     Component: lazy<ComponentType>(() => import("@/apps/calculator")),
+  },
+  {
+    id: "todo",
+    name: "To-Do List",
+    tagline: "Tasks with checkboxes and repeating reminders",
+    category: "Utilities",
+    keywords: ["todo", "to-do", "task", "tasks", "list", "checklist", "reminder", "remind", "notify", "notification", "due", "time"],
+    icon: ListTodo,
+    tile: "from-amber-glow to-orange-600",
+    glow: "shadow-amber-glow/30",
+    Component: lazy<ComponentType>(() => import("@/apps/todo")),
   },
   {
     id: "pinterest",
