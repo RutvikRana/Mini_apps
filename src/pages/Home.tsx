@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { SearchX, Sparkles } from "lucide-react";
 import { miniApps, type AppCategory } from "@/apps/registry";
 import { AppTile } from "@/components/AppTile";
+import { AuthCard } from "@/components/AuthCard";
 import { SearchBar } from "@/components/SearchBar";
 
 const CATEGORIES: (AppCategory | "All")[] = ["All", ...new Set(miniApps.map((app) => app.category))];
@@ -39,6 +40,10 @@ export default function Home() {
           MiniMix
         </motion.h1>
       </header>
+
+      <div className="mb-4">
+        <AuthCard compact />
+      </div>
 
       <SearchBar value={query} onChange={setQuery} />
 

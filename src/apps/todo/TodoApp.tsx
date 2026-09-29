@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Link } from "react-router-dom";
 import { useConvexAuth, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlarmClock, BellRing, Check, CloudOff, Cloud, Loader2, LogOut, Plus, Trash2 } from "lucide-react";
+import { AlarmClock, BellRing, Check, Cloud, Loader2, LogOut, Plus, Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { AuthCard } from "@/components/AuthCard";
 import { getSyncStatus, markSignedOut, onSyncStatus } from "@/lib/sync";
 import {
   addTask,
@@ -363,7 +363,6 @@ export default function TodoApp() {
 function SyncBar() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { signOut } = useAuthActions();
-  const me = useQuery(api.users.me, isAuthenticated ? {} : "skip");
   const [sync, setSync] = useState(getSyncStatus);
 
   useEffect(() => onSyncStatus(() => setSync(getSyncStatus())), []);
@@ -377,20 +376,10 @@ function SyncBar() {
   }
 
   if (!isAuthenticated) {
-    return (
-      <Link
-        to="/auth?returnTo=/app/todo"
-        className="focus-ring glass flex items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs text-slate-400 transition hover:border-aqua-400/40 hover:text-slate-200"
-      >
-        <span className="flex items-center gap-2">
-          <CloudOff className="h-3.5 w-3.5" /> Sign in to sync tasks across devices
-        </span>
-        <span className="rounded-lg bg-aqua-500/20 px-2 py-1 font-medium text-aqua-300">Sign in</span>
-      </Link>
-  );
-}
+    return <AuthCard compact />;
+  }
 
-if (sync.error) {
+  if (sync.error) {
     return (
       <div className="glass flex items-center justify-between gap-2 rounded-2xl border-coral/30 px-3 py-2 text-xs text-coral">
         <span className="truncate">Sync error — will retry automatically</span>
@@ -412,7 +401,7 @@ if (sync.error) {
     <div className="glass flex items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs text-slate-400">
       <span className="flex min-w-0 items-center gap-2">
         <Cloud className="h-3.5 w-3.5 text-aqua-300" />
-        <span className="truncate">{me?.email ?? "Synced"}</span>
+        <SyncedEmail />
       </span>
       <button
         type="button"
@@ -426,4 +415,10 @@ if (sync.error) {
       </button>
     </div>
   );
+}
+
+function SyncedEmail() {
+  const { isAuthenticated } = useConvexAuth();
+  const me = useQuery(api.users.me, isAuthenticated ? {} : "skip");
+  return <span className="truncate">{me?.email ?? "Synced"}</span>;
 }
