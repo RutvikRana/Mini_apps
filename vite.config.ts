@@ -9,14 +9,12 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
-  define: process.env.VITE_CONVEX_URL
-    ? {}
-    : {
-        // Fallback for builders that don't inject env vars (e.g. static
-        // hosting builds): bake the public Convex deployment URL. It is not a
-        // secret — it ships in the client bundle by design.
-        "import.meta.env.VITE_CONVEX_URL": JSON.stringify("https://canny-perch-362.convex.cloud"),
-      },
+  define: {
+    // Bake the public Convex deployment URL for builders that don't inject
+    // env vars (e.g. static hosting builds). It is not a secret — it ships in
+    // the client bundle by design.
+    "import.meta.env.VITE_CONVEX_URL": JSON.stringify("https://canny-perch-362.convex.cloud"),
+  },
   server: {
     host: "0.0.0.0",
     hmr: false,
