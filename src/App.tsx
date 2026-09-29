@@ -7,7 +7,7 @@ export default function App() {
   const location = useLocation();
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex min-h-dvh flex-col">
       <AnimatePresence mode="wait">
         <motion.main
           key={location.pathname}
@@ -15,6 +15,7 @@ export default function App() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="flex-1"
         >
           <Routes location={location}>
             <Route path="/" element={<Home />} />
@@ -23,6 +24,10 @@ export default function App() {
           </Routes>
         </motion.main>
       </AnimatePresence>
+
+      <footer className="py-6 text-center text-xs text-slate-600">
+        Made with <span className="text-rose-400">❤</span> by CryliaSoft
+      </footer>
     </div>
   );
 }
