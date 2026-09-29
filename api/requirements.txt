@@ -1,0 +1,1 @@
+# Resolver uses only the Python standard library — nothing to install.

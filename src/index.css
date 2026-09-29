@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-ink-950: #07070c;
+  --color-ink-900: #0b0b14;
+  --color-ink-800: #12121e;
+  --color-ink-700: #1b1b2b;
+  --color-ink-600: #272739;
+
+  --color-aqua-300: #7ef0d4;
+  --color-aqua-400: #34d8b4;
+  --color-aqua-500: #12b394;
+
+  --color-amber-glow: #ffb545;
+  --color-coral: #ff6b6b;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-ink-950 text-slate-200 font-sans antialiased;
+    background-image:
+      radial-gradient(60rem 40rem at 12% -8%, rgba(18, 179, 148, 0.18), transparent 60%),
+      radial-gradient(50rem 34rem at 92% 6%, rgba(255, 181, 69, 0.12), transparent 62%),
+      radial-gradient(46rem 40rem at 50% 108%, rgba(56, 130, 246, 0.12), transparent 60%);
+    background-attachment: fixed;
+    min-height: 100dvh;
+  }
+
+  ::selection {
+    @apply bg-aqua-400/30 text-white;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply border border-white/10 bg-white/[0.04] backdrop-blur-xl;
+  }
+
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-aqua-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
