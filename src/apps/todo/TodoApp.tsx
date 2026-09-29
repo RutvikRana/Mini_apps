@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Link } from "react-router-dom";
+import { useConvexAuth, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlarmClock, BellRing, Check, Plus, Trash2 } from "lucide-react";
+import { AlarmClock, BellRing, Check, CloudOff, Cloud, Loader2, LogOut, Plus, Trash2 } from "lucide-react";
+import { api } from "../../../convex/_generated/api";
+import { getSyncStatus, markSignedOut, onSyncStatus } from "@/lib/sync";
 import {
   addTask,
   changeDue,
@@ -139,6 +144,7 @@ export default function TodoApp() {
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-col gap-4">
+      <SyncBar />
       <div className="glass rounded-3xl p-4">
         <div className="flex items-center gap-2">
           <input
@@ -350,6 +356,74 @@ export default function TodoApp() {
           <Trash2 className="h-3.5 w-3.5" /> Clear completed
         </button>
       )}
+    </div>
+  );
+}
+
+function SyncBar() {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  const { signOut } = useAuthActions();
+  const me = useQuery(api.users.me, isAuthenticated ? {} : "skip");
+  const [sync, setSync] = useState(getSyncStatus);
+
+  useEffect(() => onSyncStatus(() => setSync(getSyncStatus())), []);
+
+  if (isLoading) {
+    return (
+      <div className="glass flex items-center gap-2 rounded-2xl px-3 py-2 text-xs text-slate-500">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking account…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Link
+        to="/auth?returnTo=/app/todo"
+        className="focus-ring glass flex items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs text-slate-400 transition hover:border-aqua-400/40 hover:text-slate-200"
+      >
+        <span className="flex items-center gap-2">
+          <CloudOff className="h-3.5 w-3.5" /> Sign in to sync tasks across devices
+        </span>
+        <span className="rounded-lg bg-aqua-500/20 px-2 py-1 font-medium text-aqua-300">Sign in</span>
+      </Link>
+  );
+}
+
+if (sync.error) {
+    return (
+      <div className="glass flex items-center justify-between gap-2 rounded-2xl border-coral/30 px-3 py-2 text-xs text-coral">
+        <span className="truncate">Sync error — will retry automatically</span>
+        <button
+          type="button"
+          onClick={async () => {
+            await signOut();
+            markSignedOut();
+          }}
+          className="focus-ring rounded-lg px-2 py-1 transition hover:bg-white/10"
+        >
+          <LogOut className="inline h-3.5 w-3.5" /> Sign out
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass flex items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs text-slate-400">
+      <span className="flex min-w-0 items-center gap-2">
+        <Cloud className="h-3.5 w-3.5 text-aqua-300" />
+        <span className="truncate">{me?.email ?? "Synced"}</span>
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          await signOut();
+          markSignedOut();
+        }}
+        className="focus-ring flex items-center gap-1 rounded-lg px-2 py-1 text-slate-500 transition hover:bg-white/10 hover:text-white"
+      >
+        <LogOut className="h-3.5 w-3.5" /> Sign out
+      </button>
     </div>
   );
 }

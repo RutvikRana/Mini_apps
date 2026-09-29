@@ -2,6 +2,7 @@ import { Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import Home from "@/pages/Home";
 import AppView from "@/pages/AppView";
+import Auth from "@/pages/Auth";
 import { ReminderToast } from "@/components/ReminderToast";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         >
           <Routes location={location}>
             <Route path="/" element={<Home />} />
+            <Route path="/auth" element={<Auth />} />
             <Route path="/app/:id" element={<AppView />} />
             <Route path="*" element={<Home />} />
           </Routes>

@@ -18,6 +18,8 @@ export type Task = {
   /** ISO timestamp of the next due reminder (rescheduled until done). */
   nextRemindAt: string | null;
   createdAt: number;
+  /** Last local edit time (epoch ms) — drives cloud last-writer-wins. */
+  updatedAt?: number;
 };
 
 export type Reminder = { taskId: string; text: string; at: number } | null;
@@ -215,10 +217,12 @@ export function addTask(text: string, dueAtIso: string | null, repeatMin: number
     repeatMin: Math.max(1, repeatMin),
     nextRemindAt: dueAtIso,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   };
   snapshot = { ...snapshot, tasks: [task, ...snapshot.tasks] };
   persist();
   emit();
+  emitLocal({ kind: "upsert", task });
 }
 
 export function toggleTask(id: string): void {
@@ -234,11 +238,13 @@ export function toggleTask(id: string): void {
         const at = Number.isNaN(due) || due <= now ? now + Math.max(1, task.repeatMin) * 60000 : due;
         nextRemindAt = new Date(at).toISOString();
       }
-      return { ...task, done, nextRemindAt };
+      return { ...task, done, nextRemindAt, updatedAt: Date.now() };
     }),
   };
   persist();
   emit();
+  const updated = snapshot.tasks.find((task) => task.id === id);
+  if (updated) emitLocal({ kind: "upsert", task: updated });
   if (snapshot.reminder?.taskId === id) clearReminderBanner();
 }
 
@@ -246,6 +252,7 @@ export function removeTask(id: string): void {
   snapshot = { ...snapshot, tasks: snapshot.tasks.filter((task) => task.id !== id) };
   persist();
   emit();
+  emitLocal({ kind: "delete", id });
   if (snapshot.reminder?.taskId === id) clearReminderBanner();
 }
 
@@ -253,13 +260,14 @@ export function changeDue(id: string, iso: string | null): void {
   snapshot = {
     ...snapshot,
     tasks: snapshot.tasks.map((task) => {
-      if (task.id !== id) return task;
-      const valid = iso && !Number.isNaN(Date.parse(iso)) ? iso : null;
-      return { ...task, dueAt: valid, nextRemindAt: task.done || !valid ? null : valid };
+      if (task.id !== id) return task;        const valid = iso && !Number.isNaN(Date.parse(iso)) ? iso : null;
+        return { ...task, dueAt: valid, nextRemindAt: task.done || !valid ? null : valid, updatedAt: Date.now() };
     }),
   };
   persist();
   emit();
+  const updated = snapshot.tasks.find((task) => task.id === id);
+  if (updated) emitLocal({ kind: "upsert", task: updated });
 }
 
 export function setRepeat(id: string, minutes: number): void {
@@ -273,11 +281,14 @@ export function setRepeat(id: string, minutes: number): void {
         repeatMin: Math.max(1, minutes),
         nextRemindAt:
           task.done || !task.dueAt ? task.nextRemindAt : new Date(Date.now() + step).toISOString(),
+        updatedAt: Date.now(),
       };
     }),
   };
   persist();
   emit();
+  const updated = snapshot.tasks.find((task) => task.id === id);
+  if (updated) emitLocal({ kind: "upsert", task: updated });
 }
 
 /** Push every open timed task's next reminder out by its own interval. */
@@ -310,9 +321,11 @@ export function dismissReminder(): void {
 }
 
 export function clearCompleted(): void {
+  const removed = snapshot.tasks.filter((task) => task.done);
   snapshot = { ...snapshot, tasks: snapshot.tasks.filter((task) => !task.done) };
   persist();
   emit();
+  for (const task of removed) emitLocal({ kind: "delete", id: task.id });
 }
 
 /** Fire a one-off reminder so the user can verify notifications work. */
@@ -328,4 +341,42 @@ export function testReminder(): void {
   beep();
   snapshot = { ...snapshot, reminder: { taskId: "test", text: "Test reminder — it works!", at: now } };
   emit();
+}
+
+/*
+ * Cloud sync hooks — the bridge in src/lib/sync.ts listens for local edits
+ * and applies remote changes. The store stays storage-agnostic.
+ */
+
+export type LocalTaskChange = { kind: "upsert"; task: Task } | { kind: "delete"; id: string };
+
+const localChangeListeners = new Set<(change: LocalTaskChange) => void>();
+
+/** Subscribe to local task edits/deletes (used by the cloud sync bridge). */
+export function onLocalTaskChange(listener: (change: LocalTaskChange) => void): () => void {
+  localChangeListeners.add(listener);
+  return () => {
+    localChangeListeners.delete(listener);
+  };
+}
+
+function emitLocal(change: LocalTaskChange) {
+  for (const listener of localChangeListeners) listener(change);
+}
+
+/** Merge a remote task into local state unconditionally (bridge owns LWW). */
+export function applyRemoteTask(task: Task): void {
+  snapshot = { ...snapshot, tasks: [task, ...snapshot.tasks.filter((t) => t.id !== task.id)] };
+  persist();
+  emit();
+}
+
+/** Remove a task locally without emitting a local-change event (bridge-driven). */
+export function removeRemoteTask(id: string): void {
+  const existed = snapshot.tasks.some((t) => t.id === id);
+  snapshot = { ...snapshot, tasks: snapshot.tasks.filter((t) => t.id !== id) };
+  if (existed) {
+    persist();
+    emit();
+  }
 }
