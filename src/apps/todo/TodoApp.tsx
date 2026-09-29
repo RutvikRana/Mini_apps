@@ -1,83 +1,61 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlarmClock, BellRing, Check, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { AlarmClock, BellRing, Check, Plus, Trash2 } from "lucide-react";
+import {
+  addTask,
+  changeDue,
+  clearCompleted,
+  getTodoSnapshot,
+  removeTask,
+  setRepeat,
+  subscribe,
+  toggleTask,
+  testReminder,
+} from "./store";
 
 /**
- * MiniMix To-Do — tasks with optional due times and repeating reminders.
- *
- * A reminder fires at the task's due time and repeats every N minutes
- * (per task, default 2) until the task is checked off.
- * Browser notifications are used when permitted; otherwise an in-app
- * banner + title flash keep the fallback visible.
+ * MiniMix To-Do UI. State and the reminder engine live in ./store (module
+ * level), so reminders keep working on every page and the list survives
+ * route changes. This component only renders.
  */
 
-type Task = {
-  id: string;
-  text: string;
-  done: boolean;
-  /** ISO timestamp of the due time, or null for tasks without a reminder. */
-  dueAt: string | null;
-  /** Reminder interval in minutes (used when dueAt is set). */
-  repeatMin: number;
-  /** ISO timestamp of the next due reminder (recomputed until done). */
-  nextRemindAt: string | null;
-  createdAt: number;
-};
-
-const STORAGE_KEY = "minimix.todo.v1";
-const ASKED_KEY = "minimix.todo.notifyAsked";
 const DEFAULT_REPEAT = 2;
 const REPEAT_CHOICES = [1, 2, 5, 10, 15, 30];
 
-const loadTasks = (): Task[] => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t): t is Task => !!t && typeof t.text === "string" && typeof t.done === "boolean",
-    );
-  } catch {
-    return [];
-  }
-};
+const pad = (n: number) => n.toString().padStart(2, "0");
 
-const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-/** Local ISO string with minutes precision for <input type="datetime-local"> */
-const toLocalInput = (date: Date) => {
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
+/** Local ISO with minute precision for <input type="datetime-local"> */
+const toLocalInput = (date: Date) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 
 const formatDue = (iso: string) => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
   const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (sameDay) return time;
+  if (date.toDateString() === now.toDateString()) return time;
   const tomorrow = new Date(now);
   tomorrow.setDate(now.getDate() + 1);
   if (date.toDateString() === tomorrow.toDateString()) return `Tomorrow ${time}`;
   return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 };
 
-/** Minutes until due, rounded for display ("overdue by X"). */
 const relativeDue = (iso: string, now: number) => {
   const diff = new Date(iso).getTime() - now;
   const min = Math.round(diff / 60000);
   if (diff < 0 && min > -60) return `overdue ${Math.abs(min) || 1}m`;
   if (diff < 0) return `overdue ${Math.round(Math.abs(diff) / 3600000)}h`;
+  if (min < 1) return "now";
   if (min < 60) return `in ${min}m`;
   const hours = Math.floor(min / 60);
-  if (hours < 24) return `in ${hours}h ${min % 60 ? `${min % 60}m` : ""}`.trim();
+  if (hours < 24) return `in ${hours}h${min % 60 ? ` ${min % 60}m` : ""}`;
   return `in ${Math.floor(hours / 24)}d`;
 };
 
 export default function TodoApp() {
-  const [tasks, setTasks] = useState<Task[]>(loadTasks);
+  const snapshot = useSyncExternalStore(subscribe, getTodoSnapshot);
+  const tasks = snapshot.tasks;
+
   const [draft, setDraft] = useState("");
   const [draftDue, setDraftDue] = useState("");
   const [draftRepeat, setDraftRepeat] = useState(DEFAULT_REPEAT);
@@ -85,246 +63,85 @@ export default function TodoApp() {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
     typeof Notification === "undefined" ? "unsupported" : Notification.permission,
   );
-  const [banner, setBanner] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [justAdded, setJustAdded] = useState(false);
 
-  // Persist
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-    } catch {
-      /* storage full/blocked — keep working in memory */
-    }
-  }, [tasks]);
-
-  // Ticking clock drives reminders + relative labels
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    if (typeof Notification === "undefined") return;
+    const sync = () => setPermission(Notification.permission);
+    sync();
+    // Permission can change while the tab is open (user flips a browser setting).
+    const timer = window.setInterval(sync, 2000);
     return () => window.clearInterval(timer);
   }, []);
-
-  const notify = useCallback((task: Task) => {
-    const message = `Time to: ${task.text}`;
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      try {
-        new Notification("MiniMix To-Do", { body: message, tag: task.id });
-      } catch {
-        /* some browsers require SW; fall through to banner */
-      }
-    }
-    setBanner(message);
-    try {
-      document.title = `🔔 ${message}`;
-    } catch {
-      /* noop */
-    }
-  }, []);
-
-  // Reminder engine: when now passes nextRemindAt, fire and reschedule by repeatMin
-  useEffect(() => {
-    setTasks((prev) => {
-      let changed = false;
-      const fired: Task[] = [];
-      const next = prev.map((task) => {
-        if (task.done || !task.nextRemindAt) return task;
-        const due = new Date(task.nextRemindAt).getTime();
-        if (Number.isNaN(due) || due > now) return task;
-        changed = true;
-        fired.push(task);
-        const step = Math.max(1, task.repeatMin) * 60000;
-        // Keep firing while the schedule is behind now (tab slept a while)
-        let nextAt = due + step;
-        while (nextAt <= now) nextAt += step;
-        return { ...task, nextRemindAt: new Date(nextAt).toISOString() };
-      });
-      fired.forEach(notify);
-      return changed ? next : prev;
-    });
-  }, [now, notify]);
 
   const askPermission = useCallback(async () => {
     if (typeof Notification === "undefined") return;
     try {
-      localStorage.setItem(ASKED_KEY, "1");
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      if (result === "granted") testReminder();
     } catch {
-      /* noop */
-    }
-    const result = await Notification.requestPermission();
-    setPermission(result);
-    if (result === "granted") {
-      try {
-        new Notification("MiniMix To-Do", { body: "Reminders are on ✅" });
-      } catch {
-        /* noop */
-      }
+      /* iframe/embedded contexts may block the prompt */
     }
   }, []);
 
-  useEffect(() => {
-    if (permission !== "default") return;
-    let asked = false;
-    try {
-      asked = localStorage.getItem(ASKED_KEY) === "1";
-    } catch {
-      /* noop */
-    }
-    if (!asked && tasks.some((t) => !t.done && t.dueAt)) {
-      void askPermission();
-    }
-  }, [askPermission, permission, tasks]);
-
-  const dismissBanner = useCallback(() => {
-    setBanner(null);
-    document.title = "MiniMix — tiny apps, one tap away";
-  }, []);
-
-  const addTask = useCallback(() => {
-    const text = draft.trim();
-    if (!text) {
-      inputRef.current?.focus();
-      return;
-    }
+  const submit = useCallback(() => {
     const dueDate = draftDue ? new Date(draftDue) : null;
-    const validDue = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate : null;
-    const task: Task = {
-      id: newId(),
-      text,
-      done: false,
-      dueAt: validDue ? validDue.toISOString() : null,
-      repeatMin: draftRepeat,
-      nextRemindAt: validDue ? validDue.toISOString() : null,
-      createdAt: Date.now(),
-    };
-    setTasks((prev) => [task, ...prev]);
+    const dueIso = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate.toISOString() : null;
+    const text = draft.trim();
+    if (!text) return;
+    addTask(text, dueIso, draftRepeat);
     setDraft("");
     setDraftDue("");
     setShowTime(false);
     setDraftRepeat(DEFAULT_REPEAT);
-    inputRef.current?.focus();
-  }, [draft, draftDue, draftRepeat]);
+    setJustAdded(true);
+    window.setTimeout(() => setJustAdded(false), 600);
+    if (dueIso && typeof Notification !== "undefined" && Notification.permission === "default") {
+      void askPermission();
+    }
+  }, [askPermission, draft, draftDue, draftRepeat]);
 
-  const toggleTask = useCallback((id: string) => {
-    setTasks((prev) =>
-      prev.map((task) => (task.id === id ? { ...task, done: !task.done, nextRemindAt: null } : task)),
-    );
-  }, []);
+  const onKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key === "Enter") submit();
+    },
+    [submit],
+  );
 
-  const removeTask = useCallback((id: string) => {
-    setTasks((prev) => prev.filter((task) => task.id !== id));
-  }, []);
-
-  const snoozeAll = useCallback(() => {
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.done || !task.dueAt
-          ? task
-          : { ...task, nextRemindAt: new Date(Date.now() + Math.max(1, task.repeatMin) * 60000).toISOString() },
-      ),
-    );
-    dismissBanner();
-  }, [dismissBanner]);
-
-  const setRepeat = useCallback((id: string, repeatMin: number) => {
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === id
-          ? {
-              ...task,
-              repeatMin,
-              nextRemindAt:
-                task.done || !task.dueAt
-                  ? task.nextRemindAt
-                  : new Date(Date.now() + repeatMin * 60000).toISOString(),
-            }
-          : task,
-      ),
-    );
-  }, []);
-
-  const changeDue = useCallback((id: string, value: string) => {
-    setTasks((prev) =>
-      prev.map((task) => {
-        if (task.id !== id) return task;
-        const date = value ? new Date(value) : null;
-        const valid = date && !Number.isNaN(date.getTime()) ? date : null;
-        return {
-          ...task,
-          dueAt: valid ? valid.toISOString() : null,
-          nextRemindAt: task.done || !valid ? null : valid.toISOString(),
-        };
+  const sorted = useMemo(
+    () =>
+      [...tasks].sort((a, b) => {
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        const at = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
+        const bt = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
+        if (at !== bt) return at - bt;
+        return a.createdAt - b.createdAt;
       }),
-    );
-  }, []);
+    [tasks],
+  );
 
-  const open = useMemo(() => tasks.filter((t) => !t.done), [tasks]);
-  const doneCount = tasks.length - open.length;
-  const active = open.length;
-
-  const sortTasks = (a: Task, b: Task) => {
-    if (a.done !== b.done) return a.done ? 1 : -1;
-    const at = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
-    const bt = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
-    if (at !== bt) return at - bt;
-    return a.createdAt - b.createdAt;
-  };
-  const sorted = useMemo(() => [...tasks].sort(sortTasks), [tasks]);
+  const now = Date.now();
+  const openCount = tasks.filter((t) => !t.done).length;
+  const doneCount = tasks.length - openCount;
 
   const permissionLabel =
     permission === "granted"
       ? "Notifications on"
       : permission === "denied"
-        ? "Notifications blocked — in-app reminders only"
+        ? "Blocked — banner only"
         : permission === "unsupported"
-          ? "No notification support — in-app reminders"
+          ? "No notification support — banner only"
           : "Enable notifications";
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-col gap-4">
-      {banner && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          className="glass flex items-start gap-3 rounded-2xl border-amber-glow/40 bg-amber-glow/10 p-3"
-          role="alert"
-        >
-          <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-amber-glow" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-amber-200">{banner}</p>
-            <p className="mt-0.5 text-xs text-slate-400">Reminder — repeats until you check it off.</p>
-          </div>
-          <div className="flex shrink-0 gap-1">
-            <button
-              type="button"
-              onClick={snoozeAll}
-              className="focus-ring rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
-              aria-label="Snooze all reminders"
-              title="Snooze"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={dismissBanner}
-              className="focus-ring rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
-              aria-label="Dismiss reminder"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </motion.div>
-      )}
-
       <div className="glass rounded-3xl p-4">
         <div className="flex items-center gap-2">
           <input
-            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") addTask();
-            }}
+            onKeyDown={onKeyDown}
             placeholder="Add a task…"
             aria-label="New task"
             className="focus-ring min-w-0 flex-1 bg-transparent text-base text-white placeholder:text-slate-600"
@@ -343,9 +160,11 @@ export default function TodoApp() {
           </button>
           <button
             type="button"
-            onClick={addTask}
+            onClick={submit}
             aria-label="Add task"
-            className="focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-aqua-500/20 text-aqua-300 transition hover:bg-aqua-500/30 active:scale-95"
+            className={`focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-aqua-500/20 text-aqua-300 transition hover:bg-aqua-500/30 active:scale-95 ${
+              justAdded ? "bg-aqua-500/40" : ""
+            }`}
           >
             <Plus className="h-5 w-5" />
           </button>
@@ -390,35 +209,48 @@ export default function TodoApp() {
         </AnimatePresence>
       </div>
 
-      <div className="flex items-center justify-between px-1 text-xs text-slate-600">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-600">
         <span>
-          {active} open · {doneCount} done
+          {openCount} open · {doneCount} done
         </span>
-        <button
-          type="button"
-          onClick={askPermission}
-          disabled={permission === "granted" || permission === "unsupported"}
-          className={`focus-ring rounded-full px-2 py-1 transition ${
-            permission === "granted" || permission === "unsupported"
-              ? "text-aqua-300/70"
-              : "text-slate-400 hover:bg-white/10 hover:text-white"
-          }`}
-        >
-          <BellRing className="mr-1 inline h-3 w-3" />
-          {permissionLabel}
-        </button>
+        <span className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={askPermission}
+            disabled={permission !== "default"}
+            className={`focus-ring rounded-full px-2 py-1 transition ${
+              permission === "granted"
+                ? "text-aqua-300/80"
+                : permission === "default"
+                  ? "text-slate-400 hover:bg-white/10 hover:text-white"
+                  : "text-slate-600"
+            }`}
+          >
+            <BellRing className="mr-1 inline h-3 w-3" />
+            {permissionLabel}
+          </button>
+          <span className="text-slate-700">·</span>
+          <button
+            type="button"
+            onClick={testReminder}
+            className="focus-ring rounded-full px-2 py-1 text-slate-400 transition hover:bg-white/10 hover:text-white"
+            title="Fire a sample reminder now"
+          >
+            Test reminder
+          </button>
+        </span>
       </div>
 
       <ul className="flex flex-col gap-2">
         <AnimatePresence initial={false}>
           {sorted.map((task) => {
-            const overdue = !task.done && task.nextRemindAt && new Date(task.nextRemindAt).getTime() <= now;
+            const overdue = !task.done && task.nextRemindAt && Date.parse(task.nextRemindAt) <= now;
             const dueSoon =
               !task.done &&
               task.dueAt &&
               !overdue &&
-              new Date(task.dueAt).getTime() - now < 30 * 60000 &&
-              new Date(task.dueAt).getTime() > now;
+              Date.parse(task.dueAt) - now < 30 * 60000 &&
+              Date.parse(task.dueAt) > now;
             return (
               <motion.li
                 key={task.id}
@@ -460,7 +292,7 @@ export default function TodoApp() {
                         {formatDue(task.dueAt)} · {relativeDue(task.dueAt, now)}
                       </span>
                       <span className="text-slate-700">·</span>
-                      <span className="text-slate-500">reminds every</span>
+                      <span className="text-slate-500">every</span>
                       <select
                         value={task.repeatMin}
                         onChange={(e) => setRepeat(task.id, Number(e.target.value))}
@@ -476,8 +308,8 @@ export default function TodoApp() {
                       {!task.done && (
                         <input
                           type="datetime-local"
-                          value={task.dueAt ? toLocalInput(new Date(task.dueAt)) : ""}
-                          onChange={(e) => changeDue(task.id, e.target.value)}
+                          value={toLocalInput(new Date(task.dueAt))}
+                          onChange={(e) => changeDue(task.id, e.target.value ? new Date(e.target.value).toISOString() : null)}
                           aria-label={`Change due time for "${task.text}"`}
                           className="focus-ring rounded-md border border-white/10 bg-ink-800 px-1 py-0.5 text-[11px] text-slate-300 [color-scheme:dark]"
                         />
@@ -506,10 +338,10 @@ export default function TodoApp() {
         </p>
       )}
 
-      {doneCount > 0 && active === 0 && (
+      {doneCount > 0 && openCount === 0 && (
         <button
           type="button"
-          onClick={() => setTasks((prev) => prev.filter((t) => !t.done))}
+          onClick={clearCompleted}
           className="focus-ring mx-auto flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs text-slate-500 transition hover:border-white/20 hover:text-slate-300"
         >
           <Trash2 className="h-3.5 w-3.5" /> Clear completed

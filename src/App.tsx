@@ -2,6 +2,7 @@ import { Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import Home from "@/pages/Home";
 import AppView from "@/pages/AppView";
+import { ReminderToast } from "@/components/ReminderToast";
 
 export default function App() {
   const location = useLocation();
@@ -24,6 +25,8 @@ export default function App() {
           </Routes>
         </motion.main>
       </AnimatePresence>
+
+      <ReminderToast />
 
       <footer className="py-6 text-center text-xs text-slate-600">
         Made with <span className="text-rose-400">❤</span> by CryliaSoft
