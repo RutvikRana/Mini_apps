@@ -45,6 +45,7 @@ const listeners = new Set<() => void>();
 let ticker: ReturnType<typeof setInterval> | null = null;
 let baseTitle: string | null = null;
 let audioCtx: AudioContext | null = null;
+let swRegistration: Promise<ServiceWorkerRegistration | null> | null = null;
 
 function emit() {
   for (const listener of listeners) listener();
@@ -101,13 +102,58 @@ function beep() {
   }
 }
 
-function sendBrowserNotification(text: string, tag: string) {
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+/**
+ * Register the notification service worker (public/sw.js).
+ *
+ * Android Chromium browsers (Brave, Chrome, Samsung Internet…) forbid the
+ * page-side `new Notification()` constructor — notifications there MUST be
+ * shown via a service worker's showNotification(). Safe to call multiple
+ * times; resolves to null when unsupported or registration fails.
+ */
+export function registerTodoSW(): Promise<ServiceWorkerRegistration | null> {
+  if (swRegistration) return swRegistration;
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    swRegistration = Promise.resolve(null);
+    return swRegistration;
+  }
+  swRegistration = navigator.serviceWorker
+    .register("/sw.js")
+    .then((reg) => reg)
+    .catch(() => null);
+  return swRegistration;
+}
+
+type SWNotificationOptions = NotificationOptions & { renotify?: boolean };
+
+async function showNotificationViaSW(title: string, body: string, tag: string): Promise<boolean> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return false;
   try {
-    new Notification("MiniMix To-Do", { body: `Time to: ${text}`, tag });
+    const reg = await Promise.race([
+      registerTodoSW(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (!reg) return false;
+    reg.active?.postMessage({ type: "minimix-notify", title, body, tag, url: "/" });
+    // Also try the registration's own showNotification as a belt-and-braces
+    // path (works even if the message channel lags on first activation).
+    await reg.showNotification(title, { body, tag, renotify: true, data: { url: "/" } } as SWNotificationOptions).catch(() => {});
+    return true;
   } catch {
-    /* mobile browsers / embedded iframes may forbid the constructor — the
-       banner, title flash and beep below still fire */
+    return false;
+  }
+}
+
+async function sendBrowserNotification(text: string, tag: string): Promise<void> {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const body = `Time to: ${text}`;
+  // Preferred path: service worker (required on Android Chromium).
+  const viaSW = await showNotificationViaSW("MiniMix To-Do", body, tag);
+  if (viaSW) return;
+  // Fallback: constructor (desktop Chromium/Firefox; throws on Android).
+  try {
+    new Notification("MiniMix To-Do", { body, tag });
+  } catch {
+    /* banner, title flash and beep still fire */
   }
 }
 
@@ -127,7 +173,7 @@ function tick() {
   });
   if (fired.length === 0) return;
 
-  for (const task of fired) sendBrowserNotification(task.text, task.id);
+  for (const task of fired) void sendBrowserNotification(task.text, task.id);
   beep();
   const last = fired[fired.length - 1];
   if (!last) return;
@@ -278,7 +324,7 @@ export function testReminder(): void {
   } catch {
     /* noop */
   }
-  sendBrowserNotification("Test reminder — it works!", "minimix-test");
+  void sendBrowserNotification("Test reminder — it works!", "minimix-test");
   beep();
   snapshot = { ...snapshot, reminder: { taskId: "test", text: "Test reminder — it works!", at: now } };
   emit();

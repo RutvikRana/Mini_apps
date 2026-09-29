@@ -6,11 +6,12 @@ import {
   changeDue,
   clearCompleted,
   getTodoSnapshot,
+  registerTodoSW,
   removeTask,
   setRepeat,
   subscribe,
-  toggleTask,
   testReminder,
+  toggleTask,
 } from "./store";
 
 /**
@@ -66,6 +67,8 @@ export default function TodoApp() {
   const [justAdded, setJustAdded] = useState(false);
 
   useEffect(() => {
+    // Android Chromium needs a service worker to show notifications at all.
+    void registerTodoSW();
     if (typeof Notification === "undefined") return;
     const sync = () => setPermission(Notification.permission);
     sync();
